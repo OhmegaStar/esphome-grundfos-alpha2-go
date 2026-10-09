@@ -48,6 +48,7 @@ CONFIG_SCHEMA = (
                 unit_of_measurement=UNIT_VOLT,
                 accuracy_decimals=2,
             ),
+            cv.Optional("extended_connection", default=False): cv.boolean,
         }
     )
     .extend(ble_client.BLE_CLIENT_SCHEMA)
@@ -59,6 +60,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
+    cg.add(var.set_extended_connection(config["extended_connection"]))
 
     if flow_config := config.get(CONF_FLOW):
         sens = await sensor.new_sensor(flow_config)

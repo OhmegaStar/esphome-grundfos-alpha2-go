@@ -49,8 +49,18 @@ class Alpha2 : public esphome::ble_client::BLEClientNode, public PollingComponen
   void set_current_sensor(sensor::Sensor *sensor) { this->current_sensor_ = sensor; }
   void set_speed_sensor(sensor::Sensor *sensor) { this->speed_sensor_ = sensor; }
   void set_voltage_sensor(sensor::Sensor *sensor) { this->voltage_sensor_ = sensor; }
+  void set_extended_connection(bool extended_connection) { this->extended_connection_ = extended_connection; }
 
  protected:
+  enum class ExtendedStage : uint8_t {
+    IDLE,
+    WAITING_FOR_INITIALIZATION,
+    WAITING_FOR_VERSION,
+    WAITING_FOR_NAME,
+    WAITING_FOR_FLOW_HEAD,
+    WAITING_FOR_POWER,
+  };
+
   sensor::Sensor *flow_sensor_{nullptr};
   sensor::Sensor *head_sensor_{nullptr};
   sensor::Sensor *power_sensor_{nullptr};
@@ -62,10 +72,17 @@ class Alpha2 : public esphome::ble_client::BLEClientNode, public PollingComponen
   int16_t response_offset_;
   uint8_t response_type_[GENI_RESPONSE_TYPE_LENGTH];
   uint8_t buffer_[4];
+  bool extended_connection_{false};
+  bool extended_initialized_{false};
+  ExtendedStage extended_stage_{ExtendedStage::IDLE};
+  size_t extended_response_expected_{0};
+  size_t extended_response_received_{0};
   void extract_publish_sensor_value_(const uint8_t *response, int16_t length, int16_t response_offset,
                                      int16_t value_offset, sensor::Sensor *sensor, float factor);
   void handle_geni_response_(const uint8_t *response, uint16_t length);
   void send_request_(uint8_t *request, size_t len);
+  void send_extended_request_(ExtendedStage stage);
+  bool is_extended_response_complete_(const uint8_t *response, uint16_t length);
   bool is_current_response_type_(const uint8_t *response_type);
 };
 }  // namespace alpha2

@@ -126,6 +126,10 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       if (param->open.status == ESP_GATT_OK) {
         this->response_offset_ = 0;
         this->response_length_ = 0;
+        this->extended_stage_ = ExtendedStage::IDLE;
+        this->extended_initialized_ = false;
+        this->extended_response_expected_ = 0;
+        this->extended_response_received_ = 0;
         ESP_LOGI(TAG, "[%s] connection open", this->parent_->address_str());
       }
       break;
@@ -133,6 +137,11 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     case ESP_GATTC_CONNECT_EVT: {
       if (std::memcmp(param->connect.remote_bda, this->parent_->get_remote_bda(), 6) != 0)
         return;
+      if (this->extended_connection_) {
+        ESP_LOGI(TAG, "[%s] Extended connection: skipping link encryption to match Android capture",
+                 this->parent_->address_str());
+        break;
+      }
       auto ret = esp_ble_set_encryption(param->connect.remote_bda, ESP_BLE_SEC_ENCRYPT);
       if (ret) {
         ESP_LOGW(TAG, "esp_ble_set_encryption failed, status=%x", ret);
@@ -142,6 +151,10 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     case ESP_GATTC_DISCONNECT_EVT: {
       ESP_LOGW(TAG, "[%s] BLE disconnected, reason=0x%02X", this->parent_->address_str(), param->disconnect.reason);
       this->node_state = espbt::ClientState::IDLE;
+      this->extended_stage_ = ExtendedStage::IDLE;
+      this->extended_initialized_ = false;
+      this->extended_response_expected_ = 0;
+      this->extended_response_received_ = 0;
       if (this->flow_sensor_ != nullptr)
         this->flow_sensor_->publish_state(NAN);
       if (this->head_sensor_ != nullptr)
@@ -181,13 +194,58 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       }
       ESP_LOGI(TAG, "[%s] GENI notifications registered", this->parent_->address_str());
       this->node_state = espbt::ClientState::ESTABLISHED;
+      if (this->extended_connection_)
+        ESP_LOGI(TAG, "[%s] Starting extended Android-style GENI initialization", this->parent_->address_str());
       this->update();
       break;
     }
     case ESP_GATTC_NOTIFY_EVT: {
       if (param->notify.handle == this->geni_handle_) {
         log_geni_packet("RX", this->parent_->address_str(), param->notify.value, param->notify.value_len);
-        this->handle_geni_response_(param->notify.value, param->notify.value_len);
+        if (param->notify.value_len >= 5 && param->notify.value[0] == 36 && param->notify.value[2] == 248 &&
+            param->notify.value[3] == 231 && param->notify.value[4] == 10) {
+          this->handle_geni_response_(param->notify.value, param->notify.value_len);
+        }
+        if (this->extended_connection_ && this->extended_stage_ != ExtendedStage::IDLE &&
+            this->is_extended_response_complete_(param->notify.value, param->notify.value_len)) {
+          switch (this->extended_stage_) {
+            case ExtendedStage::WAITING_FOR_INITIALIZATION:
+              this->send_extended_request_(ExtendedStage::WAITING_FOR_VERSION);
+              break;
+            case ExtendedStage::WAITING_FOR_VERSION:
+              this->send_extended_request_(ExtendedStage::WAITING_FOR_NAME);
+              break;
+            case ExtendedStage::WAITING_FOR_NAME:
+              this->extended_initialized_ = true;
+              if (this->flow_sensor_ != nullptr || this->head_sensor_ != nullptr) {
+                this->send_extended_request_(ExtendedStage::WAITING_FOR_FLOW_HEAD);
+              } else if (this->power_sensor_ != nullptr || this->current_sensor_ != nullptr ||
+                         this->speed_sensor_ != nullptr || this->voltage_sensor_ != nullptr) {
+                uint8_t geni_request_power[] = {39, 7, 231, 248, 10, 3, 87, 0, 69, 138, 205};
+                this->send_request_(geni_request_power, sizeof(geni_request_power));
+                this->extended_stage_ = ExtendedStage::WAITING_FOR_POWER;
+              } else {
+                this->extended_stage_ = ExtendedStage::IDLE;
+              }
+              break;
+            case ExtendedStage::WAITING_FOR_FLOW_HEAD: {
+              if (this->power_sensor_ != nullptr || this->current_sensor_ != nullptr ||
+                  this->speed_sensor_ != nullptr || this->voltage_sensor_ != nullptr) {
+                uint8_t geni_request_power[] = {39, 7, 231, 248, 10, 3, 87, 0, 69, 138, 205};
+                this->extended_stage_ = ExtendedStage::WAITING_FOR_POWER;
+                this->send_request_(geni_request_power, sizeof(geni_request_power));
+              } else {
+                this->extended_stage_ = ExtendedStage::IDLE;
+              }
+              break;
+            }
+            case ExtendedStage::WAITING_FOR_POWER:
+              this->extended_stage_ = ExtendedStage::IDLE;
+              break;
+            case ExtendedStage::IDLE:
+              break;
+          }
+        }
       }
       break;
     }
@@ -205,9 +263,89 @@ void Alpha2::send_request_(uint8_t *request, size_t len) {
     ESP_LOGW(TAG, "[%s] esp_ble_gattc_write_char failed, status=%d", this->parent_->address_str(), status);
 }
 
+void Alpha2::send_extended_request_(ExtendedStage stage) {
+  static uint8_t geni_request_initialize[] = {39, 7, 255, 248, 2, 3, 148, 149, 150, 79, 145};
+  static uint8_t geni_request_version[] = {39, 5, 231, 248, 7, 1, 17, 64, 9};
+  static uint8_t geni_request_name[] = {39, 5, 231, 248, 7, 1, 1, 82, 56};
+  static uint8_t geni_request_flow_head[] = {39, 7, 231, 248, 10, 3, 93, 1, 34, 98, 124};
+
+  this->extended_stage_ = stage;
+  this->extended_response_expected_ = 0;
+  this->extended_response_received_ = 0;
+
+  switch (stage) {
+    case ExtendedStage::WAITING_FOR_INITIALIZATION:
+      this->send_request_(geni_request_initialize, sizeof(geni_request_initialize));
+      break;
+    case ExtendedStage::WAITING_FOR_VERSION:
+      this->send_request_(geni_request_version, sizeof(geni_request_version));
+      break;
+    case ExtendedStage::WAITING_FOR_NAME:
+      this->send_request_(geni_request_name, sizeof(geni_request_name));
+      break;
+    case ExtendedStage::WAITING_FOR_FLOW_HEAD:
+      this->send_request_(geni_request_flow_head, sizeof(geni_request_flow_head));
+      break;
+    case ExtendedStage::WAITING_FOR_POWER:
+    case ExtendedStage::IDLE:
+      this->extended_stage_ = ExtendedStage::IDLE;
+      break;
+  }
+}
+
+bool Alpha2::is_extended_response_complete_(const uint8_t *response, uint16_t length) {
+  if (this->extended_response_received_ == 0) {
+    if (length < 5 || response[0] != 36 || response[2] != 248 || response[3] != 231) {
+      ESP_LOGW(TAG, "[%s] Extended GENI response has an invalid header", this->parent_->address_str());
+      this->extended_stage_ = ExtendedStage::IDLE;
+      return false;
+    }
+    this->extended_response_expected_ = static_cast<size_t>(response[1]) + 4;
+  }
+
+  // The response length counts bytes following the four-byte GENI prefix.
+  this->extended_response_received_ += length;
+  if (this->extended_response_received_ < this->extended_response_expected_)
+    return false;
+
+  if (this->extended_response_received_ != this->extended_response_expected_) {
+    ESP_LOGW(TAG, "[%s] Extended GENI response length mismatch: expected %u bytes, received %u",
+             this->parent_->address_str(), static_cast<unsigned>(this->extended_response_expected_),
+             static_cast<unsigned>(this->extended_response_received_));
+    this->extended_stage_ = ExtendedStage::IDLE;
+    this->extended_response_expected_ = 0;
+    this->extended_response_received_ = 0;
+    return false;
+  }
+
+  this->extended_response_expected_ = 0;
+  this->extended_response_received_ = 0;
+  return true;
+}
+
 void Alpha2::update() {
   if (this->node_state != espbt::ClientState::ESTABLISHED) {
     ESP_LOGW(TAG, "[%s] Cannot poll, not connected", this->parent_->address_str());
+    return;
+  }
+
+  if (this->extended_connection_) {
+    if (this->extended_stage_ != ExtendedStage::IDLE) {
+      ESP_LOGD(TAG, "[%s] Waiting for extended GENI response", this->parent_->address_str());
+      return;
+    }
+    if (!this->extended_initialized_) {
+      this->send_extended_request_(ExtendedStage::WAITING_FOR_INITIALIZATION);
+      return;
+    }
+    if (this->flow_sensor_ != nullptr || this->head_sensor_ != nullptr) {
+      this->send_extended_request_(ExtendedStage::WAITING_FOR_FLOW_HEAD);
+    } else if (this->power_sensor_ != nullptr || this->current_sensor_ != nullptr || this->speed_sensor_ != nullptr ||
+               this->voltage_sensor_ != nullptr) {
+      uint8_t geni_request_power[] = {39, 7, 231, 248, 10, 3, 87, 0, 69, 138, 205};
+      this->extended_stage_ = ExtendedStage::WAITING_FOR_POWER;
+      this->send_request_(geni_request_power, sizeof(geni_request_power));
+    }
     return;
   }
 
