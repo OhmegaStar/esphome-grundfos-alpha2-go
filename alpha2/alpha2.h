@@ -58,7 +58,6 @@ class Alpha2 : public esphome::ble_client::BLEClientNode, public PollingComponen
   sensor::Sensor *speed_sensor_{nullptr};
   sensor::Sensor *voltage_sensor_{nullptr};
   uint16_t geni_handle_{0};
-  uint16_t geni_cccd_handle_{0};
   int16_t response_length_;
   int16_t response_offset_;
   uint8_t response_type_[GENI_RESPONSE_TYPE_LENGTH];
