@@ -55,8 +55,10 @@ The `extended_connection` option defaults to `false`, preserving the original
 connection and request behavior. When enabled, the component skips the link
 encryption request, performs the captured GENI initialization requests
 sequentially, and waits for each complete notification before sending the next
-request. This is an experimental compatibility path; the Android application
-performs additional requests beyond this initialization sequence.
+request. It waits 100 ms after notification setup before its first request to
+allow the pump to settle. This is an experimental compatibility path; the
+Android application performs additional requests beyond this initialization
+sequence.
 
 For the first connection I think you need to press the "wifi" button on the pump to put it into pairing mode. <br />
 To find out your pump's bluetooth mac use an app like e.g. [nRF Connect](https://play.google.com/store/apps/details?id=no.nordicsemi.android.mcp) .

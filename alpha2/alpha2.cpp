@@ -194,9 +194,19 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       }
       ESP_LOGI(TAG, "[%s] GENI notifications registered", this->parent_->address_str());
       this->node_state = espbt::ClientState::ESTABLISHED;
-      if (this->extended_connection_)
+      if (this->extended_connection_) {
         ESP_LOGI(TAG, "[%s] Starting extended Android-style GENI initialization", this->parent_->address_str());
-      this->update();
+        this->extended_stage_ = ExtendedStage::WAITING_AFTER_NOTIFICATION_SETUP;
+        this->set_timeout("extended_connection_start", 100, [this]() {
+          if (this->node_state != espbt::ClientState::ESTABLISHED ||
+              this->extended_stage_ != ExtendedStage::WAITING_AFTER_NOTIFICATION_SETUP)
+            return;
+          this->extended_stage_ = ExtendedStage::IDLE;
+          this->update();
+        });
+      } else {
+        this->update();
+      }
       break;
     }
     case ESP_GATTC_NOTIFY_EVT: {
@@ -209,6 +219,8 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
         if (this->extended_connection_ && this->extended_stage_ != ExtendedStage::IDLE &&
             this->is_extended_response_complete_(param->notify.value, param->notify.value_len)) {
           switch (this->extended_stage_) {
+            case ExtendedStage::WAITING_AFTER_NOTIFICATION_SETUP:
+              break;
             case ExtendedStage::WAITING_FOR_INITIALIZATION:
               this->send_extended_request_(ExtendedStage::WAITING_FOR_VERSION);
               break;
@@ -288,6 +300,7 @@ void Alpha2::send_extended_request_(ExtendedStage stage) {
       break;
     case ExtendedStage::WAITING_FOR_POWER:
     case ExtendedStage::IDLE:
+    case ExtendedStage::WAITING_AFTER_NOTIFICATION_SETUP:
       this->extended_stage_ = ExtendedStage::IDLE;
       break;
   }

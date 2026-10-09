@@ -54,6 +54,7 @@ class Alpha2 : public esphome::ble_client::BLEClientNode, public PollingComponen
  protected:
   enum class ExtendedStage : uint8_t {
     IDLE,
+    WAITING_AFTER_NOTIFICATION_SETUP,
     WAITING_FOR_INITIALIZATION,
     WAITING_FOR_VERSION,
     WAITING_FOR_NAME,
