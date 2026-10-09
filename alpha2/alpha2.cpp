@@ -140,15 +140,50 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
         ESP_LOGE(TAG, "[%s] No GENI service found at device, not an Alpha2..?", this->parent_->address_str());
         break;
       }
+      auto *cccd = this->parent_->get_descriptor(ALPHA2_GENI_SERVICE_UUID, ALPHA2_GENI_CHARACTERISTIC_UUID,
+                                                espbt::ESPBTUUID::from_uint16(ESP_GATT_UUID_CHAR_CLIENT_CONFIG));
+      if (cccd == nullptr) {
+        ESP_LOGE(TAG, "[%s] GENI characteristic has no client configuration descriptor", this->parent_->address_str());
+        break;
+      }
+      this->geni_handle_ = chr->handle;
+      this->geni_cccd_handle_ = cccd->handle;
+      ESP_LOGD(TAG, "[%s] Registering for GENI notifications, characteristic=0x%04X CCCD=0x%04X",
+               this->parent_->address_str(), this->geni_handle_, this->geni_cccd_handle_);
       auto status = esp_ble_gattc_register_for_notify(this->parent_->get_gattc_if(), this->parent_->get_remote_bda(),
                                                       chr->handle);
       if (status) {
-        ESP_LOGW(TAG, "esp_ble_gattc_register_for_notify failed, status=%d", status);
+        ESP_LOGW(TAG, "[%s] esp_ble_gattc_register_for_notify failed, status=%d", this->parent_->address_str(),
+                 status);
       }
-      this->geni_handle_ = chr->handle;
       break;
     }
     case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
+      if (param->reg_for_notify.status != ESP_GATT_OK) {
+        ESP_LOGE(TAG, "[%s] GENI notification registration failed, status=%d", this->parent_->address_str(),
+                 param->reg_for_notify.status);
+        break;
+      }
+      uint16_t notifications_enabled = 1;
+      ESP_LOGD(TAG, "[%s] Enabling GENI notifications via CCCD 0x%04X",
+               this->parent_->address_str(), this->geni_cccd_handle_);
+      auto status = esp_ble_gattc_write_char_descr(
+          this->parent_->get_gattc_if(), this->parent_->get_conn_id(), this->geni_cccd_handle_,
+          sizeof(notifications_enabled), reinterpret_cast<uint8_t *>(&notifications_enabled),
+          ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+      if (status != ESP_GATT_OK) {
+        ESP_LOGE(TAG, "[%s] Failed to enable GENI notifications, status=%d", this->parent_->address_str(), status);
+      }
+      break;
+    }
+    case ESP_GATTC_WRITE_DESCR_EVT: {
+      if (param->write.handle != this->geni_cccd_handle_)
+        break;
+      if (param->write.status != ESP_GATT_OK) {
+        ESP_LOGE(TAG, "[%s] GENI CCCD write failed, status=%d", this->parent_->address_str(), param->write.status);
+        break;
+      }
+      ESP_LOGI(TAG, "[%s] GENI notifications enabled", this->parent_->address_str());
       this->node_state = espbt::ClientState::ESTABLISHED;
       this->update();
       break;
@@ -157,7 +192,10 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       if (param->notify.handle == this->geni_handle_) {
         ESP_LOGD(TAG, "[%s] RX GENI notification (%u bytes)", this->parent_->address_str(),
                  param->notify.value_len);
-        ESP_LOG_BUFFER_HEX_LEVEL(TAG, param->notify.value, param->notify.value_len, ESP_LOG_DEBUG);
+        for (uint16_t i = 0; i < param->notify.value_len; i++) {
+          ESP_LOGD(TAG, "[%s] RX GENI[%u]=%02X", this->parent_->address_str(), static_cast<unsigned>(i),
+                   static_cast<unsigned>(param->notify.value[i]));
+        }
         this->handle_geni_response_(param->notify.value, param->notify.value_len);
       }
       break;
@@ -168,8 +206,11 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
 }
 
 void Alpha2::send_request_(uint8_t *request, size_t len) {
-  ESP_LOGD(TAG, "[%s] TX GENI request (%u bytes)", this->parent_->address_str(), len);
-  ESP_LOG_BUFFER_HEX_LEVEL(TAG, request, len, ESP_LOG_DEBUG);
+  ESP_LOGD(TAG, "[%s] TX GENI request (%u bytes)", this->parent_->address_str(), static_cast<unsigned>(len));
+  for (size_t i = 0; i < len; i++) {
+    ESP_LOGD(TAG, "[%s] TX GENI[%u]=%02X", this->parent_->address_str(), static_cast<unsigned>(i),
+             static_cast<unsigned>(request[i]));
+  }
   auto status =
       esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(), this->geni_handle_, len,
                                request, ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);

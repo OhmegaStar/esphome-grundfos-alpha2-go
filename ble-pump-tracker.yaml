@@ -16,7 +16,8 @@ external_components:
       ref: main
       path: .
     components: [alpha2]
-
+    refresh: always
+    
 esphome:
   name: ${name}
   name_add_mac_suffix: false
@@ -26,6 +27,11 @@ api:
   encryption:
     key: !secret ble-pump-tracker-encryption-key
 
+ota:
+- platform: esphome
+  encryption:
+    key: !secret ble-pump-tracker-encryption-key
+    
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
