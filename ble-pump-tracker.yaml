@@ -1,0 +1,77 @@
+#########################################################################################################
+### BLE Tracker for Grundfos Alpha2 GO
+#########################################################################################################
+### Basis are these forked components;
+### https://github.com/OhmegaStar/esphome-grundfos-alpha2-go
+#########################################################################################################
+
+substitutions:
+  name: ble-pump-tracker
+  friendly_name: ble-pump-tracker
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/OhmegaStar/esphome-grundfos-alpha2-go
+      ref: main
+      path: .
+    components: [alpha2]
+
+esphome:
+  name: ${name}
+  name_add_mac_suffix: false
+  friendly_name: ${friendly_name}
+
+api:
+  encryption:
+    key: !secret ble-pump-tracker-encryption-key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+#Developed on a ESP32-C6 N4R2 8MB SPI Flash Board
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable IPv6
+network:
+    enable_ipv6: true
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+###########################################################################################################
+esp32_ble_tracker:
+  scan_parameters:
+    duration: 1min
+    active: false
+    
+ble_client:
+  - mac_address: 74:46:B3:E2:F4:82 # Alpha2 Go - Cirkulation Gulvvarme
+    id: floor_circulation_pump
+
+    
+sensor:
+  - platform: alpha2
+    ble_client_id: floor_circulation_pump
+    flow:
+      name: "Pump Flow"
+    head:
+      name: "Pump Pressure"
+    speed:
+      name: "Pump Speed"
+    power:
+      name: "Pump Power"
+    voltage:
+      name: "Pump Voltage"
+    current:
+      name: "Pump Current"

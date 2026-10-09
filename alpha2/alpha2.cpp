@@ -118,6 +118,7 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       break;
     }
     case ESP_GATTC_DISCONNECT_EVT: {
+      ESP_LOGW(TAG, "[%s] BLE disconnected, reason=0x%02X", this->parent_->address_str(), param->disconnect.reason);
       this->node_state = espbt::ClientState::IDLE;
       if (this->flow_sensor_ != nullptr)
         this->flow_sensor_->publish_state(NAN);
@@ -154,6 +155,9 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
     }
     case ESP_GATTC_NOTIFY_EVT: {
       if (param->notify.handle == this->geni_handle_) {
+        ESP_LOGD(TAG, "[%s] RX GENI notification (%u bytes)", this->parent_->address_str(),
+                 param->notify.value_len);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, param->notify.value, param->notify.value_len, ESP_LOG_DEBUG);
         this->handle_geni_response_(param->notify.value, param->notify.value_len);
       }
       break;
@@ -164,6 +168,8 @@ void Alpha2::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
 }
 
 void Alpha2::send_request_(uint8_t *request, size_t len) {
+  ESP_LOGD(TAG, "[%s] TX GENI request (%u bytes)", this->parent_->address_str(), len);
+  ESP_LOG_BUFFER_HEX_LEVEL(TAG, request, len, ESP_LOG_DEBUG);
   auto status =
       esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(), this->geni_handle_, len,
                                request, ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
