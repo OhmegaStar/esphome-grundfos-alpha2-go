@@ -68,6 +68,7 @@ ble_client:
     
 sensor:
   - platform: alpha2
+    extended_connection: true
     ble_client_id: floor_circulation_pump
     flow:
       name: "Pump Flow"
